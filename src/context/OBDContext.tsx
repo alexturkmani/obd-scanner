@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { elm327Service, OBDData, DTCCode, VehicleInfo } from '../services/elm327Service';
 
 interface OBDContextType {
