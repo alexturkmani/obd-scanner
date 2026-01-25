@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-obd-dark text-white min-h-screen;
+}
+
+.gauge-ring {
+  stroke-linecap: round;
+  transform-origin: center;
+  transform: rotate(-90deg);
+}
