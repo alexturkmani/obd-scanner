@@ -1,5 +1,11 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import { elm327Service, OBDData, DTCCode, VehicleInfo } from '../services/elm327Service';
+
+export interface SelectedVehicle {
+  make: string;
+  model: string;
+  year: number;
+}
 
 interface OBDContextType {
   isConnected: boolean;
@@ -8,6 +14,8 @@ interface OBDContextType {
   liveData: Partial<OBDData>;
   dtcCodes: DTCCode[];
   vehicleInfo: VehicleInfo | null;
+  selectedVehicle: SelectedVehicle | null;
+  setSelectedVehicle: (vehicle: SelectedVehicle | null) => void;
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
   readDTCs: () => Promise<void>;
@@ -40,6 +48,20 @@ export function OBDProvider({ children }: OBDProviderProps) {
   const [dtcCodes, setDtcCodes] = useState<DTCCode[]>([]);
   const [vehicleInfo, setVehicleInfo] = useState<VehicleInfo | null>(null);
   const [isMonitoring, setIsMonitoring] = useState(false);
+  const [selectedVehicle, setSelectedVehicleState] = useState<SelectedVehicle | null>(() => {
+    // Load from localStorage
+    const saved = localStorage.getItem('selectedVehicle');
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  const setSelectedVehicle = useCallback((vehicle: SelectedVehicle | null) => {
+    setSelectedVehicleState(vehicle);
+    if (vehicle) {
+      localStorage.setItem('selectedVehicle', JSON.stringify(vehicle));
+    } else {
+      localStorage.removeItem('selectedVehicle');
+    }
+  }, []);
 
   useEffect(() => {
     const unsubscribe = elm327Service.subscribe((data) => {
@@ -120,6 +142,8 @@ export function OBDProvider({ children }: OBDProviderProps) {
         liveData,
         dtcCodes,
         vehicleInfo,
+        selectedVehicle,
+        setSelectedVehicle,
         connect,
         disconnect,
         readDTCs,
