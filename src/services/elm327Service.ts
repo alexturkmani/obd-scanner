@@ -255,6 +255,11 @@ class ELM327Service {
     // Remove whitespace and newlines first
     let cleaned = response.replace(/[\s\r\n]/g, '').toUpperCase();
     
+    // Check for NO DATA response
+    if (cleaned.includes('NODATA') || cleaned.length === 0) {
+      return dtcs;
+    }
+    
     // Remove mode response prefixes (43 for mode 03, 47 for mode 07)
     // Only remove at the start of the response or after common patterns
     cleaned = cleaned.replace(/^43/, '').replace(/^47/, '');
@@ -291,13 +296,18 @@ class ELM327Service {
   }
 
   private decodeDTC(bytes: string): string | null {
+    // Validate input is 4 hex characters
+    if (!/^[0-9A-F]{4}$/i.test(bytes)) {
+      return null;
+    }
+    
     const firstChar = parseInt(bytes[0], 16);
     const typeIndex = (firstChar >> 2) & 0x03;
     const types = ['P', 'C', 'B', 'U'];
     const type = types[typeIndex];
     
     const digit1 = firstChar & 0x03;
-    const rest = bytes.substring(1);
+    const rest = bytes.substring(1).toUpperCase();
     
     return `${type}${digit1}${rest}`;
   }
