@@ -251,7 +251,26 @@ class ELM327Service {
 
   private parseDTCResponse(response: string): DTCCode[] {
     const dtcs: DTCCode[] = [];
-    const cleaned = response.replace(/[\s\r\n]/g, '').replace(/43|47/g, '');
+    
+    // Remove whitespace and newlines first
+    let cleaned = response.replace(/[\s\r\n]/g, '').toUpperCase();
+    
+    // Remove mode response prefixes (43 for mode 03, 47 for mode 07)
+    // Only remove at the start of the response or after common patterns
+    cleaned = cleaned.replace(/^43/, '').replace(/^47/, '');
+    
+    // Some adapters echo the command, remove it if present
+    cleaned = cleaned.replace(/^03/, '').replace(/^07/, '');
+    
+    // Remove number of DTCs byte if present (first 2 hex chars after mode response)
+    // The first byte indicates the number of DTCs, we can skip it
+    if (cleaned.length >= 2 && /^[0-9A-F]{2}/.test(cleaned)) {
+      // Check if this looks like a DTC count (usually small number 0x00-0x0F)
+      const firstByte = parseInt(cleaned.substring(0, 2), 16);
+      if (firstByte <= 15) {
+        cleaned = cleaned.substring(2);
+      }
+    }
     
     // Each DTC is 4 hex chars (2 bytes)
     for (let i = 0; i < cleaned.length; i += 4) {
@@ -326,19 +345,41 @@ class ELM327Service {
       const command = `01${pid}`;
       const response = await this.sendCommand(command);
       
-      // Parse response
-      const cleaned = response.replace(/[\s\r\n]/g, '');
-      // Remove echo and mode/pid prefix
-      const dataStart = cleaned.indexOf(`41${pid.toUpperCase()}`);
-      if (dataStart === -1) return null;
+      // Parse response - remove all whitespace and convert to uppercase
+      let cleaned = response.replace(/[\s\r\n]/g, '').toUpperCase();
       
-      const data = cleaned.substring(dataStart + 4);
-      const bytes = [];
-      for (let i = 0; i < data.length; i += 2) {
-        bytes.push(parseInt(data.substring(i, i + 2), 16));
+      // Remove common response patterns that might interfere
+      // Some adapters include "SEARCHING..." or "NO DATA"
+      if (cleaned.includes('NODATA') || cleaned.includes('SEARCHING')) {
+        return null;
       }
       
-      const pidDef = MODE_01_PIDS[pid.toUpperCase()];
+      // Look for the mode 01 response (41) followed by the PID
+      const pidUpper = pid.toUpperCase();
+      const searchPattern = `41${pidUpper}`;
+      const dataStart = cleaned.indexOf(searchPattern);
+      
+      if (dataStart === -1) {
+        console.warn(`PID response not found for ${pid}. Response: ${response}`);
+        return null;
+      }
+      
+      // Extract data bytes after the mode+pid (skip the "41" + PID portion = 4 chars)
+      const dataHex = cleaned.substring(dataStart + searchPattern.length);
+      
+      // Convert hex string to byte array
+      const bytes: number[] = [];
+      for (let i = 0; i < dataHex.length && i < 16; i += 2) { // Limit to 8 bytes max
+        const byteStr = dataHex.substring(i, i + 2);
+        if (byteStr.length === 2 && /^[0-9A-F]{2}$/.test(byteStr)) {
+          bytes.push(parseInt(byteStr, 16));
+        } else {
+          break; // Stop at first invalid byte
+        }
+      }
+      
+      // Apply the formula for this PID
+      const pidDef = MODE_01_PIDS[pidUpper];
       if (pidDef && bytes.length > 0) {
         return pidDef.formula(bytes);
       }
