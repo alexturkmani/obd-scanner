@@ -261,19 +261,26 @@ class ELM327Service {
     }
     
     // Remove mode response prefixes (43 for mode 03, 47 for mode 07)
-    // Only remove at the start of the response or after common patterns
+    // Only remove at the start of the response
     cleaned = cleaned.replace(/^43/, '').replace(/^47/, '');
     
     // Some adapters echo the command, remove it if present
     cleaned = cleaned.replace(/^03/, '').replace(/^07/, '');
     
-    // Remove number of DTCs byte if present (first 2 hex chars after mode response)
-    // The first byte indicates the number of DTCs, we can skip it
+    // The first byte after the mode response indicates the number of DTCs
+    // Format: [count byte] [DTC1 - 2 bytes] [DTC2 - 2 bytes] ...
+    // However, we'll parse all valid DTCs regardless of the count byte
+    // to be more robust with different adapter implementations
     if (cleaned.length >= 2 && /^[0-9A-F]{2}/.test(cleaned)) {
-      // Check if this looks like a DTC count (usually small number 0x00-0x0F)
       const firstByte = parseInt(cleaned.substring(0, 2), 16);
-      if (firstByte <= 15) {
-        cleaned = cleaned.substring(2);
+      // Only skip if it's a reasonable DTC count (0-127 DTCs)
+      // This helps avoid skipping actual DTC data
+      if (firstByte < 128 && cleaned.length >= 6) {
+        // Verify the remaining data looks like DTCs (pairs of hex bytes)
+        const remaining = cleaned.substring(2);
+        if (remaining.length % 4 === 0) {
+          cleaned = remaining;
+        }
       }
     }
     
@@ -379,7 +386,7 @@ class ELM327Service {
       
       // Convert hex string to byte array
       const bytes: number[] = [];
-      for (let i = 0; i < dataHex.length && i < 16; i += 2) { // Limit to 8 bytes max
+      for (let i = 0; i < dataHex.length && i < 16; i += 2) { // Limit to 16 hex characters (8 bytes max)
         const byteStr = dataHex.substring(i, i + 2);
         if (byteStr.length === 2 && /^[0-9A-F]{2}$/.test(byteStr)) {
           bytes.push(parseInt(byteStr, 16));
