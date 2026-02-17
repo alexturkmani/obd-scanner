@@ -8,6 +8,10 @@ const ELM327_CHARACTERISTIC_RX = '0000fff1-0000-1000-8000-00805f9b34fb';
 // Alternative UUIDs for different ELM327 adapters
 const ALT_SERVICE_UUID = '00001101-0000-1000-8000-00805f9b34fb';
 
+// DTC parsing constants
+const MAX_REASONABLE_DTC_COUNT = 127; // Maximum number of DTCs we expect in a response
+const MAX_PID_DATA_BYTES = 8; // Maximum number of data bytes in a PID response
+
 export interface OBDData {
   rpm: number;
   speed: number;
@@ -273,9 +277,9 @@ class ELM327Service {
     // to be more robust with different adapter implementations
     if (cleaned.length >= 2 && /^[0-9A-F]{2}/.test(cleaned)) {
       const firstByte = parseInt(cleaned.substring(0, 2), 16);
-      // Only skip if it's a reasonable DTC count (0-127 DTCs)
+      // Only skip if it's a reasonable DTC count
       // This helps avoid skipping actual DTC data
-      if (firstByte < 128 && cleaned.length >= 6) {
+      if (firstByte <= MAX_REASONABLE_DTC_COUNT && cleaned.length >= 6) {
         // Verify the remaining data looks like DTCs (pairs of hex bytes)
         const remaining = cleaned.substring(2);
         if (remaining.length % 4 === 0) {
@@ -386,7 +390,8 @@ class ELM327Service {
       
       // Convert hex string to byte array
       const bytes: number[] = [];
-      for (let i = 0; i < dataHex.length && i < 16; i += 2) { // Limit to 16 hex characters (8 bytes max)
+      const maxHexChars = MAX_PID_DATA_BYTES * 2; // 2 hex characters per byte
+      for (let i = 0; i < dataHex.length && i < maxHexChars; i += 2) {
         const byteStr = dataHex.substring(i, i + 2);
         if (byteStr.length === 2 && /^[0-9A-F]{2}$/.test(byteStr)) {
           bytes.push(parseInt(byteStr, 16));
