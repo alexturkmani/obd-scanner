@@ -62,6 +62,22 @@ interface OBDContextType {
   resetAdaptiveValues: () => Promise<ProgrammingResult>;
   testComponent: (pid: string) => Promise<ProgrammingResult>;
   requestDPFRegeneration: () => Promise<ProgrammingResult>;
+  // Advanced Programming
+  resetGaugeCluster: () => Promise<ProgrammingResult>;
+  throttleRelearn: () => Promise<ProgrammingResult>;
+  injectorBuzzTest: (cylinder: number) => Promise<ProgrammingResult>;
+  absBleedProcedure: () => Promise<ProgrammingResult>;
+  calibrateSteeringAngle: () => Promise<ProgrammingResult>;
+  batteryRegistration: () => Promise<ProgrammingResult>;
+  resetTransmissionAdaptation: () => Promise<ProgrammingResult>;
+  resetTPMS: () => Promise<ProgrammingResult>;
+  immobilizerInit: () => Promise<ProgrammingResult>;
+  // Advanced Diagnostics
+  readReadinessMonitors: () => Promise<{ mil: boolean; dtcCount: number; monitors: { name: string; available: boolean; complete: boolean }[] }>;
+  readO2SensorTests: () => Promise<{ testId: string; value: number; min: number; max: number; passed: boolean }[]>;
+  readFullFreezeFrame: () => Promise<Record<string, { name: string; value: number; unit: string }>>;
+  readMisfireData: () => Promise<{ cylinder: number; count: number }[]>;
+  readFuelTrims: () => Promise<{ bank: number; shortTerm: number; longTerm: number }[]>;
   // Performance
   performanceData: PerformanceData;
   startPerformanceTimer: () => void;
@@ -425,6 +441,20 @@ export function OBDProvider({ children }: OBDProviderProps) {
   const resetAdaptiveValues = async () => elm327Service.resetAdaptiveValues();
   const testComponent = async (pid: string) => elm327Service.testComponent(pid);
   const requestDPFRegeneration = async () => elm327Service.requestDPFRegeneration();
+  const resetGaugeCluster = async () => elm327Service.resetGaugeCluster();
+  const throttleRelearn = async () => elm327Service.throttleRelearn();
+  const injectorBuzzTest = async (cylinder: number) => elm327Service.injectorBuzzTest(cylinder);
+  const absBleedProcedure = async () => elm327Service.absBleedProcedure();
+  const calibrateSteeringAngle = async () => elm327Service.calibrateSteeringAngle();
+  const batteryRegistration = async () => elm327Service.batteryRegistration();
+  const resetTransmissionAdaptation = async () => elm327Service.resetTransmissionAdaptation();
+  const resetTPMS = async () => elm327Service.resetTPMS();
+  const immobilizerInit = async () => elm327Service.immobilizerInit();
+  const readReadinessMonitors = async () => elm327Service.readReadinessMonitors();
+  const readO2SensorTests = async () => elm327Service.readO2SensorTests();
+  const readFullFreezeFrame = async () => elm327Service.readFullFreezeFrame();
+  const readMisfireData = async () => elm327Service.readMisfireData();
+  const readFuelTrims = async () => elm327Service.readFuelTrims();
 
   return (
     <OBDContext.Provider
@@ -442,6 +472,11 @@ export function OBDProvider({ children }: OBDProviderProps) {
         updateMaintenance, addMaintenanceItem, deleteMaintenanceItem,
         sendRawCommand, resetServiceLight, resetAdaptiveValues,
         testComponent, requestDPFRegeneration,
+        resetGaugeCluster, throttleRelearn, injectorBuzzTest,
+        absBleedProcedure, calibrateSteeringAngle, batteryRegistration,
+        resetTransmissionAdaptation, resetTPMS, immobilizerInit,
+        readReadinessMonitors, readO2SensorTests, readFullFreezeFrame,
+        readMisfireData, readFuelTrims,
         performanceData, startPerformanceTimer, stopPerformanceTimer, resetPerformanceTimer,
         isPerformanceTiming,
         autoReconnect, setAutoReconnect,

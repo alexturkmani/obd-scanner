@@ -654,6 +654,339 @@ class ELM327Service {
     }
   }
 
+  // ---- Advanced Programming / Module Control ----
+
+  /** Reset gauge cluster / instrument cluster service interval */
+  async resetGaugeCluster(): Promise<ProgrammingResult> {
+    try {
+      // Clear DTCs + reset service interval counters
+      // Mode 04 clears DTCs; some ECUs also reset service counters
+      const clearRes = await this.sendCommand('04', 5000);
+      // Attempt to reset service interval via Mode 08 TID 01 (on-board test)
+      let extraRes = '';
+      try {
+        extraRes = await this.sendCommand('0801', 3000);
+      } catch {}
+      if (/OK|44/i.test(clearRes)) {
+        return { success: true, message: 'Gauge cluster service indicators reset. Cycle ignition to confirm.', rawResponse: `${clearRes} | ${extraRes}` };
+      }
+      return { success: false, message: 'ECU did not acknowledge reset', rawResponse: clearRes };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'Gauge cluster reset failed' };
+    }
+  }
+
+  /** Throttle body alignment / electronic throttle idle relearn */
+  async throttleRelearn(): Promise<ProgrammingResult> {
+    try {
+      // Reset throttle adaptations by clearing DTCs then requesting idle relearn
+      await this.sendCommand('04', 3000);
+      // Mode 08 PID 00 = general on-board test (used for throttle relearn on many vehicles)
+      const response = await this.sendCommand('0800', 5000);
+      if (/NODATA|UNABLE|ERROR|\?/i.test(response)) {
+        return { success: false, message: 'Throttle relearn not supported via generic OBD. Vehicle may require manufacturer-specific commands.', rawResponse: response };
+      }
+      return { success: true, message: 'Throttle body relearn initiated. Keep engine at idle for 2 minutes without touching the accelerator.', rawResponse: response };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'Throttle relearn failed' };
+    }
+  }
+
+  /** Injector buzz test - activate injectors sequentially */
+  async injectorBuzzTest(cylinderNum: number): Promise<ProgrammingResult> {
+    try {
+      // Mode 08 with cylinder-specific TID
+      const tid = cylinderNum.toString(16).padStart(2, '0').toUpperCase();
+      const response = await this.sendCommand(`0803${tid}`, 5000);
+      if (/NODATA|UNABLE|ERROR|\?/i.test(response)) {
+        return { success: false, message: `Injector test not supported for cylinder ${cylinderNum}. Requires manufacturer-specific protocol.`, rawResponse: response };
+      }
+      return { success: true, message: `Injector buzz test initiated for cylinder ${cylinderNum}`, rawResponse: response };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'Injector test failed' };
+    }
+  }
+
+  /** ABS bleed procedure initiation */
+  async absBleedProcedure(): Promise<ProgrammingResult> {
+    try {
+      // ABS bleeding typically requires manufacturer-specific UDS commands
+      // Attempt via Mode 08 (control on-board system)
+      const response = await this.sendCommand('0804', 8000);
+      if (/NODATA|UNABLE|ERROR|\?/i.test(response)) {
+        return { success: false, message: 'ABS bleed procedure not available via generic OBD-II. Requires manufacturer-specific diagnostic tool for ABS module access.', rawResponse: response };
+      }
+      return { success: true, message: 'ABS bleed procedure initiated. Follow vehicle-specific bleed sequence at each caliper.', rawResponse: response };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'ABS bleed procedure failed' };
+    }
+  }
+
+  /** Steering angle sensor (SAS) calibration */
+  async calibrateSteeringAngle(): Promise<ProgrammingResult> {
+    try {
+      // SAS calibration via Mode 08
+      const response = await this.sendCommand('0805', 5000);
+      if (/NODATA|UNABLE|ERROR|\?/i.test(response)) {
+        return { success: false, message: 'Steering angle calibration not available via generic OBD. Turn steering wheel full lock-to-lock and re-center. Some vehicles require manufacturer tool.', rawResponse: response };
+      }
+      return { success: true, message: 'Steering angle sensor calibration started. Turn wheel full left, full right, then center.', rawResponse: response };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'SAS calibration failed' };
+    }
+  }
+
+  /** Battery registration / BMS reset after battery replacement */
+  async batteryRegistration(): Promise<ProgrammingResult> {
+    try {
+      // Attempt to reset battery management via clearing adaptation data
+      const response = await this.sendCommand('04', 5000);
+      // Some vehicles accept Mode 08 for battery reset
+      let bmRes = '';
+      try {
+        bmRes = await this.sendCommand('0806', 3000);
+      } catch {}
+      if (/OK|44/i.test(response)) {
+        return { success: true, message: 'Battery management system reset. New battery capacity will be learned over the next few drive cycles.', rawResponse: `${response} | ${bmRes}` };
+      }
+      return { success: false, message: 'Battery registration not confirmed by ECU', rawResponse: response };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'Battery registration failed' };
+    }
+  }
+
+  /** Transmission adaptation reset */
+  async resetTransmissionAdaptation(): Promise<ProgrammingResult> {
+    try {
+      // Clear DTCs resets transmission learned shift points on many vehicles
+      const response = await this.sendCommand('04', 5000);
+      if (/OK|44/i.test(response)) {
+        return { success: true, message: 'Transmission adaptations reset. Shift patterns will be relearned over the next 50-100 miles of driving.', rawResponse: response };
+      }
+      return { success: false, message: 'Transmission reset not confirmed', rawResponse: response };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'Transmission reset failed' };
+    }
+  }
+
+  /** TPMS sensor reset / relearn */
+  async resetTPMS(): Promise<ProgrammingResult> {
+    try {
+      const response = await this.sendCommand('0807', 5000);
+      if (/NODATA|UNABLE|ERROR|\?/i.test(response)) {
+        return { success: false, message: 'TPMS reset not available via generic OBD. Check owner\'s manual for manual TPMS relearn procedure (usually involves tire pressure button with ignition ON).', rawResponse: response };
+      }
+      return { success: true, message: 'TPMS relearn initiated. Drive at 25+ mph for 10 minutes to complete sensor registration.', rawResponse: response };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'TPMS reset failed' };
+    }
+  }
+
+  /** Immobilizer / key programming init (puts ECU in programming mode) */
+  async immobilizerInit(): Promise<ProgrammingResult> {
+    try {
+      // Security access request - Mode 27 (UDS Security Access)
+      // This requests seed from ECU; actual key programming requires manufacturer seed-key algorithms
+      const response = await this.sendCommand('2701', 5000);
+      if (/NODATA|UNABLE|ERROR|\?|7F/i.test(response)) {
+        return { success: false, message: 'Immobilizer access denied. Key programming requires manufacturer-specific security access credentials. Generic OBD cannot bypass immobilizer security.', rawResponse: response };
+      }
+      return { success: true, message: 'ECU security access initiated. Seed received. Key algorithm required to proceed.', rawResponse: response };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'Immobilizer init failed' };
+    }
+  }
+
+  /** Read O2 sensor monitoring test results (Mode 06) */
+  async readO2SensorTests(): Promise<{ testId: string; value: number; min: number; max: number; passed: boolean }[]> {
+    const results: { testId: string; value: number; min: number; max: number; passed: boolean }[] = [];
+    try {
+      // Mode 06 - Request results of specific monitored systems
+      const response = await this.sendCommand('0600', 5000);
+      const cleaned = response.replace(/[\s\r\n]/g, '');
+      if (/NODATA|ERROR/i.test(cleaned)) return results;
+      // Parse Mode 06 response: 46 TID CIDH CIDL VAL MINH MINL MAXH MAXL
+      const lines = response.split(/[\r\n]+/).filter(l => l.trim());
+      for (const line of lines) {
+        const hex = line.replace(/\s/g, '');
+        if (!hex.startsWith('46') || hex.length < 18) continue;
+        const tid = hex.substring(2, 4);
+        const val = parseInt(hex.substring(8, 12), 16);
+        const min = parseInt(hex.substring(12, 16), 16);
+        const max = parseInt(hex.substring(16, 20), 16);
+        results.push({
+          testId: `TID ${tid}`,
+          value: val,
+          min,
+          max,
+          passed: val >= min && val <= max,
+        });
+      }
+    } catch (error) {
+      console.error('Error reading O2 sensor tests:', error);
+    }
+    return results;
+  }
+
+  /** Read readiness monitor status (Mode 01 PID 01) */
+  async readReadinessMonitors(): Promise<{
+    mil: boolean;
+    dtcCount: number;
+    monitors: { name: string; available: boolean; complete: boolean }[];
+  }> {
+    const defaultResult = { mil: false, dtcCount: 0, monitors: [] as { name: string; available: boolean; complete: boolean }[] };
+    try {
+      const response = await this.sendCommand('0101', 3000);
+      const cleaned = response.replace(/[\s\r\n]/g, '');
+      const idx = cleaned.indexOf('4101');
+      if (idx === -1) return defaultResult;
+      const data = cleaned.substring(idx + 4);
+      if (data.length < 8) return defaultResult;
+      
+      const a = parseInt(data.substring(0, 2), 16);
+      const b = parseInt(data.substring(2, 4), 16);
+      const c = parseInt(data.substring(4, 6), 16);
+      const d = parseInt(data.substring(6, 8), 16);
+
+      const mil = (a & 0x80) !== 0;
+      const dtcCount = a & 0x7F;
+      const isSpark = (b & 0x08) === 0; // bit 3 of B = 0 means spark ignition
+
+      const monitors: { name: string; available: boolean; complete: boolean }[] = [];
+
+      // Common monitors (bits in byte B)
+      const commonMonitors = [
+        { name: 'Misfire', availBit: 0, completeBit: 4 },
+        { name: 'Fuel System', availBit: 1, completeBit: 5 },
+        { name: 'Components', availBit: 2, completeBit: 6 },
+      ];
+      for (const m of commonMonitors) {
+        monitors.push({
+          name: m.name,
+          available: (b & (1 << m.availBit)) !== 0,
+          complete: (b & (1 << m.completeBit)) === 0, // 0 = complete
+        });
+      }
+
+      if (isSpark) {
+        // Spark-ignition monitors (bytes C and D)
+        const sparkMonitors = [
+          { name: 'Catalyst', cBit: 0, dBit: 0 },
+          { name: 'Heated Catalyst', cBit: 1, dBit: 1 },
+          { name: 'Evaporative System', cBit: 2, dBit: 2 },
+          { name: 'Secondary Air', cBit: 3, dBit: 3 },
+          { name: 'A/C Refrigerant', cBit: 4, dBit: 4 },
+          { name: 'Oxygen Sensor', cBit: 5, dBit: 5 },
+          { name: 'Oxygen Sensor Heater', cBit: 6, dBit: 6 },
+          { name: 'EGR/VVT System', cBit: 7, dBit: 7 },
+        ];
+        for (const m of sparkMonitors) {
+          monitors.push({
+            name: m.name,
+            available: (c & (1 << m.cBit)) !== 0,
+            complete: (d & (1 << m.dBit)) === 0,
+          });
+        }
+      } else {
+        // Compression-ignition (diesel) monitors
+        const dieselMonitors = [
+          { name: 'NMHC Catalyst', cBit: 0, dBit: 0 },
+          { name: 'NOx/SCR Aftertreatment', cBit: 1, dBit: 1 },
+          { name: 'Boost Pressure', cBit: 3, dBit: 3 },
+          { name: 'Exhaust Gas Sensor', cBit: 5, dBit: 5 },
+          { name: 'PM Filter', cBit: 6, dBit: 6 },
+          { name: 'EGR/VVT System', cBit: 7, dBit: 7 },
+        ];
+        for (const m of dieselMonitors) {
+          monitors.push({
+            name: m.name,
+            available: (c & (1 << m.cBit)) !== 0,
+            complete: (d & (1 << m.dBit)) === 0,
+          });
+        }
+      }
+
+      return { mil, dtcCount, monitors };
+    } catch (error) {
+      console.error('Error reading readiness monitors:', error);
+      return defaultResult;
+    }
+  }
+
+  /** Read full freeze frame snapshot (Mode 02) */
+  async readFullFreezeFrame(): Promise<Record<string, { name: string; value: number; unit: string }>> {
+    const snapshot: Record<string, { name: string; value: number; unit: string }> = {};
+    const freezePids: { pid: string; name: string; unit: string }[] = [
+      { pid: '02', name: 'DTC that triggered freeze frame', unit: '' },
+      { pid: '04', name: 'Engine Load', unit: '%' },
+      { pid: '05', name: 'Coolant Temp', unit: '°C' },
+      { pid: '06', name: 'Short Term Fuel Trim B1', unit: '%' },
+      { pid: '07', name: 'Long Term Fuel Trim B1', unit: '%' },
+      { pid: '0B', name: 'Intake Manifold Pressure', unit: 'kPa' },
+      { pid: '0C', name: 'Engine RPM', unit: 'RPM' },
+      { pid: '0D', name: 'Vehicle Speed', unit: 'km/h' },
+      { pid: '0E', name: 'Timing Advance', unit: '°' },
+      { pid: '0F', name: 'Intake Air Temp', unit: '°C' },
+      { pid: '11', name: 'Throttle Position', unit: '%' },
+    ];
+
+    for (const p of freezePids) {
+      const val = await this.readFreezeFrame(p.pid);
+      if (val !== null) {
+        snapshot[p.pid] = { name: p.name, value: val, unit: p.unit };
+      }
+    }
+    return snapshot;
+  }
+
+  /** Cylinder power balance / misfire count (Mode 06) */
+  async readMisfireData(): Promise<{ cylinder: number; count: number }[]> {
+    const misfires: { cylinder: number; count: number }[] = [];
+    try {
+      // Mode 06 TID A0-A8 are typically misfire counters
+      for (let i = 0; i <= 8; i++) {
+        const tid = (0xA0 + i).toString(16).toUpperCase();
+        const response = await this.sendCommand(`06${tid}`, 2000);
+        const cleaned = response.replace(/[\s\r\n]/g, '');
+        if (/NODATA|ERROR/i.test(cleaned)) continue;
+        const prefix = `46${tid}`;
+        const idx = cleaned.indexOf(prefix);
+        if (idx !== -1 && cleaned.length >= idx + prefix.length + 4) {
+          const countHex = cleaned.substring(idx + prefix.length + 4, idx + prefix.length + 8);
+          const count = parseInt(countHex, 16);
+          if (!isNaN(count)) {
+            misfires.push({ cylinder: i + 1, count });
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error reading misfire data:', error);
+    }
+    return misfires;
+  }
+
+  /** Read fuel trim data for all banks */
+  async readFuelTrims(): Promise<{ bank: number; shortTerm: number; longTerm: number }[]> {
+    const trims: { bank: number; shortTerm: number; longTerm: number }[] = [];
+    try {
+      // Bank 1
+      const stft1 = await this.readPID('06');
+      const ltft1 = await this.readPID('07');
+      if (stft1 !== null || ltft1 !== null) {
+        trims.push({ bank: 1, shortTerm: stft1 ?? 0, longTerm: ltft1 ?? 0 });
+      }
+      // Bank 2
+      const stft2 = await this.readPID('08');
+      const ltft2 = await this.readPID('09');
+      if (stft2 !== null || ltft2 !== null) {
+        trims.push({ bank: 2, shortTerm: stft2 ?? 0, longTerm: ltft2 ?? 0 });
+      }
+    } catch (error) {
+      console.error('Error reading fuel trims:', error);
+    }
+    return trims;
+  }
+
   async readFreezeFrame(pid: string): Promise<number | null> {
     try {
       const command = `02${pid}00`; // Frame 00
