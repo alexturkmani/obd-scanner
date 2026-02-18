@@ -6,6 +6,65 @@ body {
   @apply bg-obd-dark text-white min-h-screen;
 }
 
+/* Light theme overrides */
+.light-theme,
+.light-theme body {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+.light-theme .bg-obd-dark {
+  background-color: #f1f5f9 !important;
+}
+
+.light-theme .bg-obd-card {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light-theme .bg-gray-700 {
+  background-color: #e2e8f0 !important;
+}
+
+.light-theme .bg-gray-900 {
+  background-color: #f8fafc !important;
+}
+
+.light-theme .hover\:bg-gray-700:hover {
+  background-color: #e2e8f0 !important;
+}
+
+.light-theme .hover\:bg-gray-600:hover {
+  background-color: #cbd5e1 !important;
+}
+
+.light-theme .border-gray-700 {
+  border-color: #e2e8f0 !important;
+}
+
+.light-theme .border-gray-600 {
+  border-color: #cbd5e1 !important;
+}
+
+.light-theme .text-white {
+  color: #0f172a !important;
+}
+
+.light-theme .text-gray-400,
+.light-theme .text-gray-500 {
+  color: #64748b !important;
+}
+
+.light-theme .text-gray-300 {
+  color: #475569 !important;
+}
+
+/* Keep active nav white text on accent */
+.light-theme .bg-obd-accent.text-white,
+.light-theme .bg-obd-accent .text-white {
+  color: #ffffff !important;
+}
+
 .gauge-ring {
   stroke-linecap: round;
   transform-origin: center;

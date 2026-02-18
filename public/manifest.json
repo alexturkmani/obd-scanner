@@ -1,0 +1,19 @@
+{
+  "name": "OBD-II Scanner",
+  "short_name": "OBD Scanner",
+  "description": "Web-based OBD-II diagnostic scanner for vehicles using ELM327 Bluetooth adapter",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#3b82f6",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["auto", "utilities"]
+}

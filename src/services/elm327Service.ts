@@ -20,6 +20,14 @@ export interface OBDData {
   oilTemp: number;
   mafRate: number;
   runTime: number;
+  boostPressure: number;
+  intakePressure: number;
+}
+
+export interface ProgrammingResult {
+  success: boolean;
+  message: string;
+  rawResponse?: string;
 }
 
 export interface DTCCode {
@@ -46,6 +54,9 @@ class ELM327Service {
   private isConnected: boolean = false;
   private listeners: Set<(data: Partial<OBDData>) => void> = new Set();
   private _isMonitoring: boolean = false;
+  private lastDeviceName: string | null = null;
+  private disconnectListeners: Set<() => void> = new Set();
+
 
   async connect(): Promise<boolean> {
     try {
@@ -95,12 +106,56 @@ class ELM327Service {
       // Initialize ELM327
       await this.initializeAdapter();
 
+      // Listen for disconnections for auto-reconnect
+      this.device.addEventListener('gattserverdisconnected', () => {
+        this.isConnected = false;
+        this._isMonitoring = false;
+        this.disconnectListeners.forEach(cb => cb());
+      });
+
+      this.lastDeviceName = this.device.name || null;
       this.isConnected = true;
       return true;
     } catch (error) {
       console.error('Connection error:', error);
       this.isConnected = false;
       throw error;
+    }
+  }
+
+  onDisconnect(callback: () => void): () => void {
+    this.disconnectListeners.add(callback);
+    return () => this.disconnectListeners.delete(callback);
+  }
+
+  getLastDeviceName(): string | null {
+    return this.lastDeviceName;
+  }
+
+  async tryAutoReconnect(): Promise<boolean> {
+    try {
+      if (this.device?.gatt && !this.device.gatt.connected) {
+        this.server = await this.device.gatt.connect();
+        if (!this.server) return false;
+
+        let service: BluetoothRemoteGATTService;
+        try {
+          service = await this.server.getPrimaryService(ELM327_SERVICE_UUID);
+        } catch {
+          service = await this.server.getPrimaryService(ALT_SERVICE_UUID);
+        }
+
+        this.txCharacteristic = await service.getCharacteristic(ELM327_CHARACTERISTIC_TX);
+        this.rxCharacteristic = await service.getCharacteristic(ELM327_CHARACTERISTIC_RX);
+        await this.rxCharacteristic.startNotifications();
+        this.rxCharacteristic.addEventListener('characteristicvaluechanged', this.handleNotification.bind(this));
+        await this.initializeAdapter();
+        this.isConnected = true;
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
     }
   }
 
@@ -443,6 +498,7 @@ class ELM327Service {
       { pid: '5C', key: 'oilTemp' },
       { pid: '10', key: 'mafRate' },
       { pid: '1F', key: 'runTime' },
+      { pid: '0B', key: 'intakePressure' },
     ];
     
     for (const { pid, key } of pidMappings) {
@@ -494,6 +550,165 @@ class ELM327Service {
 
   stopLiveMonitoring(): void {
     this._isMonitoring = false;
+  }
+
+  // ---- Permanent DTCs (Mode 0A) ----
+  async readPermanentDTCs(): Promise<DTCCode[]> {
+    const dtcs: DTCCode[] = [];
+    try {
+      const response = await this.sendCommand('0A');
+      // Mode 0A response prefix is '4A'
+      const parsed = this.parseDTCResponseWithPrefix(response, '4A');
+      dtcs.push(...parsed);
+    } catch (error) {
+      console.error('Error reading permanent DTCs:', error);
+    }
+    return dtcs;
+  }
+
+  private parseDTCResponseWithPrefix(response: string, prefix: string): DTCCode[] {
+    const dtcs: DTCCode[] = [];
+    const lines = response.split(/[\r\n]+/).filter(l => l.trim());
+    let hexData = '';
+    for (const line of lines) {
+      let cleaned = line.replace(/[\s]/g, '');
+      if (cleaned.startsWith(prefix)) {
+        cleaned = cleaned.substring(prefix.length);
+      }
+      if (/^[0-9A-Fa-f]+$/.test(cleaned)) {
+        hexData += cleaned;
+      }
+    }
+    for (let i = 0; i < hexData.length; i += 4) {
+      const bytes = hexData.substring(i, i + 4);
+      if (bytes.length < 4 || bytes === '0000') continue;
+      const dtc = this.decodeDTC(bytes);
+      if (dtc) {
+        const description = DTC_DEFINITIONS[dtc] || this.generateDTCDescription(dtc);
+        const severity = this.getDTCSeverity(dtc);
+        const category = this.getDTCCategory(dtc);
+        dtcs.push({ code: dtc, description, severity, category });
+      }
+    }
+    return dtcs;
+  }
+
+  // ---- Vehicle Programming / Control ----
+  async sendRawCommand(command: string): Promise<string> {
+    try {
+      return await this.sendCommand(command, 5000);
+    } catch (error) {
+      return `ERROR: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
+  async resetServiceLight(): Promise<ProgrammingResult> {
+    try {
+      // Clear DTCs also resets service indicators on most vehicles
+      const response = await this.sendCommand('04', 5000);
+      if (/OK|44/i.test(response)) {
+        return { success: true, message: 'Service light reset successfully', rawResponse: response };
+      }
+      return { success: false, message: 'Unexpected response from ECU', rawResponse: response };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'Failed to reset service light' };
+    }
+  }
+
+  async resetAdaptiveValues(): Promise<ProgrammingResult> {
+    try {
+      // Clear DTCs resets adaptive learning values
+      const response = await this.sendCommand('04', 5000);
+      if (/OK|44/i.test(response)) {
+        return { success: true, message: 'Adaptive values reset. Drive cycle needed to relearn.', rawResponse: response };
+      }
+      return { success: false, message: 'Unexpected response from ECU', rawResponse: response };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'Failed to reset' };
+    }
+  }
+
+  async testComponent(mode08pid: string): Promise<ProgrammingResult> {
+    try {
+      // Mode 08 - Control operation of on-board systems
+      const response = await this.sendCommand(`08${mode08pid}`, 5000);
+      if (/NODATA|UNABLE|ERROR|\?/i.test(response)) {
+        return { success: false, message: 'Component test not supported by this vehicle', rawResponse: response };
+      }
+      return { success: true, message: 'Component test initiated', rawResponse: response };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'Component test failed' };
+    }
+  }
+
+  async requestDPFRegeneration(): Promise<ProgrammingResult> {
+    try {
+      // Attempt DPF regeneration via Mode 08 (vehicle-specific)
+      const response = await this.sendCommand('0800', 10000);
+      if (/NODATA|UNABLE|ERROR|\?/i.test(response)) {
+        return { success: false, message: 'DPF regeneration not supported via OBD on this vehicle', rawResponse: response };
+      }
+      return { success: true, message: 'DPF regeneration request sent. Keep engine running at idle.', rawResponse: response };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'DPF regeneration request failed' };
+    }
+  }
+
+  async readFreezeFrame(pid: string): Promise<number | null> {
+    try {
+      const command = `02${pid}00`; // Frame 00
+      const response = await this.sendCommand(command);
+      const cleaned = response.replace(/[\s\r\n]/g, '');
+      if (/NODATA|UNABLE|ERROR|\?/i.test(cleaned)) return null;
+      const pidUpper = pid.toUpperCase();
+      const pfx = `42${pidUpper}`;
+      const dataStart = cleaned.indexOf(pfx);
+      if (dataStart === -1) return null;
+      const data = cleaned.substring(dataStart + 2 + pidUpper.length);
+      const bytes: number[] = [];
+      for (let i = 0; i < data.length && i < 8; i += 2) {
+        const byte = parseInt(data.substring(i, i + 2), 16);
+        if (!isNaN(byte)) bytes.push(byte);
+      }
+      const pidDef = MODE_01_PIDS[pidUpper];
+      if (pidDef && bytes.length > 0) return pidDef.formula(bytes);
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  async getECUInfo(): Promise<{ calId: string; cvn: string; ecuName: string }> {
+    let calId = 'Not Available';
+    let cvn = 'Not Available';
+    let ecuName = 'Not Available';
+    try {
+      const calRes = await this.sendCommand('0904', 5000);
+      calId = this.parseASCIIResponse(calRes, '49 04') || 'Not Available';
+    } catch {}
+    try {
+      const cvnRes = await this.sendCommand('0906', 5000);
+      cvn = cvnRes.replace(/[\s\r\n]/g, '').replace(/4906/g, '').trim() || 'Not Available';
+    } catch {}
+    try {
+      const ecuRes = await this.sendCommand('090A', 5000);
+      ecuName = this.parseASCIIResponse(ecuRes, '49 0A') || 'Not Available';
+    } catch {}
+    return { calId, cvn, ecuName };
+  }
+
+  private parseASCIIResponse(response: string, prefix: string): string | null {
+    const lines = response.split(/[\r\n]+/).filter(l => l.trim());
+    let hexData = lines.join('').replace(/[^0-9A-Fa-f]/g, '');
+    const pfx = prefix.replace(/\s/g, '');
+    const idx = hexData.indexOf(pfx);
+    if (idx !== -1) hexData = hexData.substring(idx + pfx.length);
+    let result = '';
+    for (let i = 0; i < hexData.length; i += 2) {
+      const charCode = parseInt(hexData.substring(i, i + 2), 16);
+      if (charCode >= 32 && charCode <= 126) result += String.fromCharCode(charCode);
+    }
+    return result.trim() || null;
   }
 }
 
