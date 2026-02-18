@@ -45,6 +45,7 @@ class ELM327Service {
   private responseResolver: ((value: string) => void) | null = null;
   private isConnected: boolean = false;
   private listeners: Set<(data: Partial<OBDData>) => void> = new Set();
+  private _isMonitoring: boolean = false;
 
   async connect(): Promise<boolean> {
     try {
@@ -251,16 +252,32 @@ class ELM327Service {
 
   private parseDTCResponse(response: string): DTCCode[] {
     const dtcs: DTCCode[] = [];
-    const cleaned = response.replace(/[\s\r\n]/g, '').replace(/43|47/g, '');
+    
+    // Split response into lines and process each one
+    const lines = response.split(/[\r\n]+/).filter(l => l.trim());
+    let hexData = '';
+    
+    for (const line of lines) {
+      let cleaned = line.replace(/[\s]/g, '');
+      // Remove mode response prefix only from the START of each line
+      // Mode 03 response starts with '43', Mode 07 starts with '47'
+      if (cleaned.startsWith('43') || cleaned.startsWith('47')) {
+        cleaned = cleaned.substring(2);
+      }
+      // Skip non-hex data (e.g. 'SEARCHING...', 'NO DATA', adapter responses)
+      if (/^[0-9A-Fa-f]+$/.test(cleaned)) {
+        hexData += cleaned;
+      }
+    }
     
     // Each DTC is 4 hex chars (2 bytes)
-    for (let i = 0; i < cleaned.length; i += 4) {
-      const bytes = cleaned.substring(i, i + 4);
+    for (let i = 0; i < hexData.length; i += 4) {
+      const bytes = hexData.substring(i, i + 4);
       if (bytes.length < 4 || bytes === '0000') continue;
       
       const dtc = this.decodeDTC(bytes);
       if (dtc) {
-        const description = DTC_DEFINITIONS[dtc] || 'Unknown fault code';
+        const description = DTC_DEFINITIONS[dtc] || this.generateDTCDescription(dtc);
         const severity = this.getDTCSeverity(dtc);
         const category = this.getDTCCategory(dtc);
         
@@ -269,6 +286,56 @@ class ELM327Service {
     }
     
     return dtcs;
+  }
+
+  private generateDTCDescription(code: string): string {
+    // Generate a meaningful description based on DTC code structure
+    const prefix = code.substring(0, 2);
+    const number = parseInt(code.substring(2), 10);
+    
+    const systemDescriptions: Record<string, Record<string, string>> = {
+      'P0': {
+        '0': 'Fuel and Air Metering',
+        '1': 'Fuel and Air Metering',
+        '2': 'Fuel and Air Metering (Injector Circuit)',
+        '3': 'Ignition System or Misfire',
+        '4': 'Auxiliary Emission Controls',
+        '5': 'Vehicle Speed, Idle Control & Auxiliary Inputs',
+        '6': 'Computer & Output Circuit',
+        '7': 'Transmission',
+        '8': 'Transmission',
+        '9': 'Transmission',
+      },
+      'P2': {
+        '0': 'Fuel and Air Metering & Auxiliary Emission',
+        '1': 'Fuel and Air Metering & Auxiliary Emission',
+        '2': 'Fuel and Air Metering (Injector Circuit)',
+        '3': 'Ignition System or Misfire',
+        '4': 'Auxiliary Emission Controls',
+        '5': 'Vehicle Speed, Idle Control & Auxiliary Inputs',
+        '6': 'Computer & Output Circuit',
+        '7': 'Transmission',
+        '8': 'Transmission',
+        '9': 'Transmission',
+      },
+    };
+    
+    const systems = systemDescriptions[prefix];
+    if (systems) {
+      const subSystem = systems[code[2]] || 'General';
+      return `${subSystem} - Code ${code}`;
+    }
+    
+    // Generic descriptions by category
+    const categoryNames: Record<string, string> = {
+      'P': 'Powertrain',
+      'C': 'Chassis',
+      'B': 'Body',
+      'U': 'Network Communication',
+    };
+    const cat = categoryNames[code[0]] || 'Unknown';
+    const specific = code[1] === '0' || code[1] === '2' ? 'Generic' : 'Manufacturer Specific';
+    return `${cat} ${specific} Fault - Code ${code}`;
   }
 
   private decodeDTC(bytes: string): string | null {
@@ -326,19 +393,29 @@ class ELM327Service {
       const command = `01${pid}`;
       const response = await this.sendCommand(command);
       
-      // Parse response
+      // Parse response - handle multi-line responses
       const cleaned = response.replace(/[\s\r\n]/g, '');
-      // Remove echo and mode/pid prefix
-      const dataStart = cleaned.indexOf(`41${pid.toUpperCase()}`);
+      
+      // Skip 'NO DATA', 'UNABLE TO CONNECT', '?' etc.
+      if (/NODATA|UNABLE|ERROR|\?/i.test(cleaned)) return null;
+      
+      // Find the response prefix: 41 + PID
+      const pidUpper = pid.toUpperCase();
+      const prefix = `41${pidUpper}`;
+      const dataStart = cleaned.indexOf(prefix);
       if (dataStart === -1) return null;
       
-      const data = cleaned.substring(dataStart + 4);
+      // Data bytes start after the mode response (41) + PID length
+      const data = cleaned.substring(dataStart + 2 + pidUpper.length);
       const bytes = [];
-      for (let i = 0; i < data.length; i += 2) {
-        bytes.push(parseInt(data.substring(i, i + 2), 16));
+      for (let i = 0; i < data.length && i < 8; i += 2) {
+        const byte = parseInt(data.substring(i, i + 2), 16);
+        if (!isNaN(byte)) {
+          bytes.push(byte);
+        }
       }
       
-      const pidDef = MODE_01_PIDS[pid.toUpperCase()];
+      const pidDef = MODE_01_PIDS[pidUpper];
       if (pidDef && bytes.length > 0) {
         return pidDef.formula(bytes);
       }
@@ -353,25 +430,33 @@ class ELM327Service {
   async readAllSensorData(): Promise<Partial<OBDData>> {
     const data: Partial<OBDData> = {};
     
-    // Read common PIDs
-    const readings = await Promise.all([
-      this.readPID('0C').then(v => ({ rpm: v })),
-      this.readPID('0D').then(v => ({ speed: v })),
-      this.readPID('05').then(v => ({ coolantTemp: v })),
-      this.readPID('04').then(v => ({ engineLoad: v })),
-      this.readPID('11').then(v => ({ throttlePosition: v })),
-      this.readPID('2F').then(v => ({ fuelLevel: v })),
-      this.readPID('0F').then(v => ({ intakeTemp: v })),
-      this.readPID('42').then(v => ({ voltage: v })),
-    ]);
+    // ELM327 is a serial device - must send commands sequentially, NOT in parallel.
+    // Sending in parallel causes response mixing and timeouts since there's only one response channel.
+    const pidMappings: { pid: string; key: keyof OBDData }[] = [
+      { pid: '0C', key: 'rpm' },
+      { pid: '0D', key: 'speed' },
+      { pid: '05', key: 'coolantTemp' },
+      { pid: '04', key: 'engineLoad' },
+      { pid: '11', key: 'throttlePosition' },
+      { pid: '2F', key: 'fuelLevel' },
+      { pid: '0F', key: 'intakeTemp' },
+      { pid: '42', key: 'voltage' },
+      { pid: '5C', key: 'oilTemp' },
+      { pid: '10', key: 'mafRate' },
+      { pid: '1F', key: 'runTime' },
+    ];
     
-    readings.forEach(r => {
-      Object.entries(r).forEach(([key, value]) => {
+    for (const { pid, key } of pidMappings) {
+      if (!this._isMonitoring) break; // Stop early if monitoring was cancelled
+      try {
+        const value = await this.readPID(pid);
         if (value !== null) {
           (data as Record<string, number>)[key] = value;
         }
-      });
-    });
+      } catch {
+        // Skip failed PIDs (vehicle may not support all)
+      }
+    }
     
     return data;
   }
@@ -386,17 +471,21 @@ class ELM327Service {
   }
 
   async startLiveMonitoring(interval: number = 500): Promise<void> {
+    this._isMonitoring = true;
+    
     const poll = async () => {
-      if (!this.isConnected) return;
+      if (!this.isConnected || !this._isMonitoring) return;
       
       try {
         const data = await this.readAllSensorData();
-        this.notifyListeners(data);
+        if (this._isMonitoring) {
+          this.notifyListeners(data);
+        }
       } catch (error) {
         console.error('Monitoring error:', error);
       }
       
-      if (this.isConnected) {
+      if (this.isConnected && this._isMonitoring) {
         setTimeout(poll, interval);
       }
     };
@@ -405,7 +494,7 @@ class ELM327Service {
   }
 
   stopLiveMonitoring(): void {
-    // The polling will stop automatically when isConnected is false
+    this._isMonitoring = false;
   }
 }
 
