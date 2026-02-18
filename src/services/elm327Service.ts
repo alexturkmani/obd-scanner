@@ -291,7 +291,6 @@ class ELM327Service {
   private generateDTCDescription(code: string): string {
     // Generate a meaningful description based on DTC code structure
     const prefix = code.substring(0, 2);
-    const number = parseInt(code.substring(2), 10);
     
     const systemDescriptions: Record<string, Record<string, string>> = {
       'P0': {
